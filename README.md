@@ -10,6 +10,32 @@ If you want Codex in your code editor (VS Code, Cursor, Windsurf), <a href="http
 
 ---
 
+## Fork Note
+
+This fork contains a prototype TUI slash command, `/repeat`.
+
+What it adds:
+
+- `/repeat <seconds> <message>`: periodically submit a user message to the current thread
+- `/repeat off`: stop the active repeating task
+- local echo for repeated messages in the active CLI view
+- stale tick suppression so stopping repeat does not leak one last queued tick
+
+Relevant branch:
+
+- [`richardcao/repeat-slash-command`](https://github.com/RichardCao/codex/tree/richardcao/repeat-slash-command)
+
+Compare against upstream:
+
+- [`openai/codex...RichardCao:richardcao/repeat-slash-command`](https://github.com/openai/codex/compare/main...RichardCao:richardcao/repeat-slash-command)
+
+Quick local verification:
+
+```text
+/repeat 5 hello
+/repeat off
+```
+
 ## Quickstart
 
 ### Installing and running Codex CLI
