@@ -891,6 +891,7 @@ pub(crate) struct ChatWidget {
     pending_status_indicator_restore: bool,
     suppress_queue_autosend: bool,
     repeat_task: Option<tokio::task::JoinHandle<()>>,
+    repeat_generation: u64,
     thread_id: Option<ThreadId>,
     last_turn_id: Option<String>,
     thread_name: Option<String>,
@@ -5189,6 +5190,7 @@ impl ChatWidget {
             pending_status_indicator_restore: false,
             suppress_queue_autosend: false,
             repeat_task: None,
+            repeat_generation: 0,
             thread_id: None,
             last_turn_id: None,
             thread_name: None,
@@ -10776,6 +10778,35 @@ impl ChatWidget {
         } else {
             self.submit_user_message(user_message);
         }
+    }
+
+    pub(crate) fn echo_background_user_message(&mut self, text: String) {
+        let items = vec![UserInput::Text {
+            text: text.clone(),
+            text_elements: Vec::new(),
+        }];
+        if self.is_user_turn_pending_or_running() {
+            self.pending_steers.push_back(PendingSteer {
+                user_message: UserMessage::from(text),
+                compare_key: Self::pending_steer_compare_key_from_items(&items),
+            });
+            self.saw_plan_item_this_turn = false;
+            self.refresh_pending_input_preview();
+        } else {
+            self.user_turn_pending_start = true;
+            self.on_user_message_event(UserMessageEvent {
+                message: text,
+                images: Some(Vec::new()),
+                local_images: Vec::new(),
+                text_elements: Vec::new(),
+            });
+        }
+        self.needs_final_message_separator = false;
+        self.request_redraw();
+    }
+
+    pub(crate) fn repeat_generation(&self) -> u64 {
+        self.repeat_generation
     }
 
     /// True when the UI is in the regular composer state with no running task,

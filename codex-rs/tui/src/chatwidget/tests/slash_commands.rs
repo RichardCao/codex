@@ -693,8 +693,15 @@ async fn slash_repeat_sends_periodic_messages_to_the_original_thread() {
     yield_now().await;
 
     match rx.try_recv() {
-        Ok(AppEvent::SubmitThreadOp { thread_id, op }) => {
+        Ok(AppEvent::RepeatTick {
+            thread_id,
+            generation,
+            text,
+            op,
+        }) => {
             assert_eq!(thread_id, original_thread_id);
+            assert_eq!(generation, chat.repeat_generation());
+            assert_eq!(text, "ping");
             assert_matches!(
                 op,
                 Op::UserTurn { items, .. }
@@ -711,8 +718,15 @@ async fn slash_repeat_sends_periodic_messages_to_the_original_thread() {
     yield_now().await;
 
     match rx.try_recv() {
-        Ok(AppEvent::SubmitThreadOp { thread_id, .. }) => {
+        Ok(AppEvent::RepeatTick {
+            thread_id,
+            generation,
+            text,
+            ..
+        }) => {
             assert_eq!(thread_id, original_thread_id);
+            assert_eq!(generation, chat.repeat_generation());
+            assert_eq!(text, "ping");
         }
         other => panic!("expected second repeat submit event, got {other:?}"),
     }
@@ -763,6 +777,24 @@ async fn slash_repeat_usage_error_is_available_from_local_recall() {
         "expected usage message, got: {rendered:?}"
     );
     assert_eq!(recall_latest_after_clearing(&mut chat), "/repeat nope");
+}
+
+#[tokio::test]
+async fn background_user_message_echo_renders_in_history() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+
+    chat.echo_background_user_message("ping".to_string());
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("ping"),
+        "expected echoed background message in history, got: {rendered:?}"
+    );
 }
 
 #[tokio::test]

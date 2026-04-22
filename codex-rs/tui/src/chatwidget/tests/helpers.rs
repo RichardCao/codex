@@ -253,6 +253,7 @@ pub(super) async fn make_chatwidget_manual(
         pending_status_indicator_restore: false,
         suppress_queue_autosend: false,
         repeat_task: None,
+        repeat_generation: 0,
         thread_id: None,
         last_turn_id: None,
         thread_name: None,

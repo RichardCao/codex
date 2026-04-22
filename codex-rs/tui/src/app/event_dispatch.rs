@@ -254,6 +254,20 @@ impl App {
                 self.submit_thread_op(app_server, thread_id, op.into())
                     .await?;
             }
+            AppEvent::RepeatTick {
+                thread_id,
+                generation,
+                text,
+                op,
+            } => {
+                if generation != self.chat_widget.repeat_generation() {
+                    return Ok(AppRunControl::Continue);
+                }
+                self.submit_thread_op(app_server, thread_id, op.into()).await?;
+                if self.chat_widget.thread_id() == Some(thread_id) {
+                    self.chat_widget.echo_background_user_message(text);
+                }
+            }
             AppEvent::ThreadHistoryEntryResponse { thread_id, event } => {
                 self.enqueue_thread_history_entry_response(thread_id, event)
                     .await?;

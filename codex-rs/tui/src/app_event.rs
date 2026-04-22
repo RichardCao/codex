@@ -120,6 +120,15 @@ pub(crate) enum AppEvent {
         op: Op,
     },
 
+    /// Submit a background user turn to a specific thread and locally echo it if that
+    /// thread is currently active in the TUI.
+    RepeatTick {
+        thread_id: ThreadId,
+        generation: u64,
+        text: String,
+        op: Op,
+    },
+
     /// Deliver a synthetic history lookup response to a specific thread channel.
     ThreadHistoryEntryResponse {
         thread_id: ThreadId,

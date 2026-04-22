@@ -101,6 +101,7 @@ impl ChatWidget {
     }
 
     fn stop_repeat_task(&mut self) -> bool {
+        self.repeat_generation = self.repeat_generation.wrapping_add(1);
         if let Some(handle) = self.repeat_task.take() {
             handle.abort();
             true
@@ -165,6 +166,7 @@ impl ChatWidget {
         };
 
         let replaced_existing = self.stop_repeat_task();
+        let generation = self.repeat_generation;
         let tx = self.app_event_tx.clone();
         let period = Duration::from_secs(every_secs);
         let handle = tokio::spawn(async move {
@@ -173,8 +175,10 @@ impl ChatWidget {
             interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
             loop {
                 interval.tick().await;
-                tx.send(AppEvent::SubmitThreadOp {
+                tx.send(AppEvent::RepeatTick {
                     thread_id,
+                    generation,
+                    text: message.clone(),
                     op: op.clone().into_core(),
                 });
             }
