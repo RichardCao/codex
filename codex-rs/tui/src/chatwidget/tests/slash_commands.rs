@@ -1,5 +1,8 @@
 use super::*;
 use pretty_assertions::assert_eq;
+use std::time::Duration;
+use tokio::task::yield_now;
+use tokio::time::advance;
 
 fn turn_complete_event(turn_id: &str, last_agent_message: Option<&str>) -> TurnCompleteEvent {
     serde_json::from_value(serde_json::json!({
@@ -662,6 +665,104 @@ async fn inline_slash_command_is_available_from_local_recall_after_dispatch() {
     let _ = drain_insert_history(&mut rx);
     chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     assert_eq!(chat.bottom_pane.composer_text(), "/rename Better title");
+}
+
+#[tokio::test(start_paused = true)]
+async fn slash_repeat_sends_periodic_messages_to_the_original_thread() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    let original_thread_id = ThreadId::new();
+    chat.thread_id = Some(original_thread_id);
+    set_chatgpt_auth(&mut chat);
+
+    submit_composer_text(&mut chat, "/repeat 5 ping");
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("Repeating every 5s in this thread."),
+        "expected repeat startup message, got: {rendered:?}"
+    );
+
+    chat.thread_id = Some(ThreadId::new());
+    yield_now().await;
+    advance(Duration::from_secs(5)).await;
+    yield_now().await;
+
+    match rx.try_recv() {
+        Ok(AppEvent::SubmitThreadOp { thread_id, op }) => {
+            assert_eq!(thread_id, original_thread_id);
+            assert_matches!(
+                op,
+                Op::UserTurn { items, .. }
+                if items == vec![UserInput::Text {
+                    text: "ping".to_string(),
+                    text_elements: Vec::new(),
+                }]
+            );
+        }
+        other => panic!("expected repeat submit event, got {other:?}"),
+    }
+
+    advance(Duration::from_secs(5)).await;
+    yield_now().await;
+
+    match rx.try_recv() {
+        Ok(AppEvent::SubmitThreadOp { thread_id, .. }) => {
+            assert_eq!(thread_id, original_thread_id);
+        }
+        other => panic!("expected second repeat submit event, got {other:?}"),
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn slash_repeat_off_stops_future_messages() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    chat.thread_id = Some(ThreadId::new());
+    set_chatgpt_auth(&mut chat);
+
+    submit_composer_text(&mut chat, "/repeat 5 ping");
+    let _ = drain_insert_history(&mut rx);
+
+    submit_composer_text(&mut chat, "/repeat off");
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("Stopped repeating messages."),
+        "expected repeat stop message, got: {rendered:?}"
+    );
+
+    advance(Duration::from_secs(20)).await;
+    yield_now().await;
+
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn slash_repeat_usage_error_is_available_from_local_recall() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+
+    submit_composer_text(&mut chat, "/repeat nope");
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("Usage: /repeat <seconds> <message> | /repeat off"),
+        "expected usage message, got: {rendered:?}"
+    );
+    assert_eq!(recall_latest_after_clearing(&mut chat), "/repeat nope");
 }
 
 #[tokio::test]

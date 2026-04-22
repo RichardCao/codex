@@ -890,6 +890,7 @@ pub(crate) struct ChatWidget {
     // Set when commentary output completes; once stream queues go idle we restore the status row.
     pending_status_indicator_restore: bool,
     suppress_queue_autosend: bool,
+    repeat_task: Option<tokio::task::JoinHandle<()>>,
     thread_id: Option<ThreadId>,
     last_turn_id: Option<String>,
     thread_name: Option<String>,
@@ -5187,6 +5188,7 @@ impl ChatWidget {
             retry_status_header: None,
             pending_status_indicator_restore: false,
             suppress_queue_autosend: false,
+            repeat_task: None,
             thread_id: None,
             last_turn_id: None,
             thread_name: None,
@@ -11307,6 +11309,9 @@ fn has_websocket_timing_metrics(summary: RuntimeMetricsSummary) -> bool {
 
 impl Drop for ChatWidget {
     fn drop(&mut self) {
+        if let Some(handle) = self.repeat_task.take() {
+            handle.abort();
+        }
         self.reset_realtime_conversation_state();
         self.stop_rate_limit_poller();
     }

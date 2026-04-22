@@ -8,6 +8,8 @@
 use super::*;
 use crate::bottom_pane::prompt_args::parse_slash_name;
 use crate::bottom_pane::slash_commands;
+use std::time::Duration;
+use tokio::time::MissedTickBehavior;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SlashCommandDispatchSource {
@@ -28,6 +30,7 @@ const SIDE_STARTING_CONTEXT_LABEL: &str = "Side starting...";
 const SIDE_REVIEW_UNAVAILABLE_MESSAGE: &str =
     "'/side' is unavailable while code review is running.";
 const SIDE_SLASH_COMMAND_UNAVAILABLE_HINT: &str = "Press Esc to return to the main thread first.";
+const REPEAT_USAGE: &str = "Usage: /repeat <seconds> <message> | /repeat off";
 
 impl ChatWidget {
     /// Dispatch a bare slash command and record its staged local-history entry.
@@ -95,6 +98,98 @@ impl ChatWidget {
         };
 
         self.request_side_conversation(parent_thread_id, /*user_message*/ None);
+    }
+
+    fn stop_repeat_task(&mut self) -> bool {
+        if let Some(handle) = self.repeat_task.take() {
+            handle.abort();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn repeat_user_turn_op(&mut self, text: &str) -> Option<AppCommand> {
+        let effective_mode = self.effective_collaboration_mode();
+        if effective_mode.model().trim().is_empty() {
+            self.add_error_message(
+                "Thread model is unavailable. Wait for the thread to finish syncing or choose a model before starting /repeat.".to_string(),
+            );
+            return None;
+        }
+
+        let collaboration_mode = if self.collaboration_modes_enabled() {
+            self.active_collaboration_mask
+                .as_ref()
+                .map(|_| effective_mode.clone())
+        } else {
+            None
+        };
+        let personality = self
+            .config
+            .personality
+            .filter(|_| self.config.features.enabled(Feature::Personality))
+            .filter(|_| self.current_model_supports_personality());
+
+        Some(AppCommand::user_turn(
+            vec![UserInput::Text {
+                text: text.to_string(),
+                text_elements: Vec::new(),
+            }],
+            self.config.cwd.to_path_buf(),
+            self.config.permissions.approval_policy.value(),
+            self.config.permissions.sandbox_policy.get().clone(),
+            effective_mode.model().to_string(),
+            effective_mode.reasoning_effort(),
+            /*summary*/ None,
+            Some(self.config.service_tier),
+            /*final_output_json_schema*/ None,
+            collaboration_mode,
+            personality,
+        ))
+    }
+
+    fn start_repeat_task(&mut self, every_secs: u64, message: String) {
+        let Some(thread_id) = self.thread_id else {
+            self.add_error_message(
+                "'/repeat' is unavailable before the session starts.".to_string(),
+            );
+            return;
+        };
+        if every_secs == 0 {
+            self.add_error_message(REPEAT_USAGE.to_string());
+            return;
+        }
+        let Some(op) = self.repeat_user_turn_op(&message) else {
+            return;
+        };
+
+        let replaced_existing = self.stop_repeat_task();
+        let tx = self.app_event_tx.clone();
+        let period = Duration::from_secs(every_secs);
+        let handle = tokio::spawn(async move {
+            let mut interval =
+                tokio::time::interval_at(tokio::time::Instant::now() + period, period);
+            interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+            loop {
+                interval.tick().await;
+                tx.send(AppEvent::SubmitThreadOp {
+                    thread_id,
+                    op: op.clone().into_core(),
+                });
+            }
+        });
+        self.repeat_task = Some(handle);
+
+        let replacement = if replaced_existing {
+            " Replaced the previous repeat."
+        } else {
+            ""
+        };
+        self.add_info_message(
+            format!("Repeating every {every_secs}s in this thread.{replacement}"),
+            Some("Use /repeat off to stop.".to_string()),
+        );
     }
 
     pub(super) fn dispatch_command(&mut self, cmd: SlashCommand) {
@@ -167,6 +262,9 @@ impl ChatWidget {
                 self.session_telemetry
                     .counter("codex.thread.rename", /*inc*/ 1, &[]);
                 self.show_rename_prompt();
+            }
+            SlashCommand::Repeat => {
+                self.add_error_message(REPEAT_USAGE.to_string());
             }
             SlashCommand::Model => {
                 self.open_model_popup();
@@ -559,6 +657,33 @@ impl ChatWidget {
                 };
                 self.app_event_tx.set_thread_name(name);
             }
+            SlashCommand::Repeat if trimmed.eq_ignore_ascii_case("off") => {
+                if self.stop_repeat_task() {
+                    self.add_info_message("Stopped repeating messages.".to_string(), None);
+                } else {
+                    self.add_info_message("No active repeat is running.".to_string(), None);
+                }
+            }
+            SlashCommand::Repeat => {
+                let mut parts = trimmed.splitn(2, char::is_whitespace);
+                let Some(seconds) = parts.next() else {
+                    self.add_error_message(REPEAT_USAGE.to_string());
+                    return;
+                };
+                let Some(message) = parts.next() else {
+                    self.add_error_message(REPEAT_USAGE.to_string());
+                    return;
+                };
+                let Ok(every_secs) = seconds.parse::<u64>() else {
+                    self.add_error_message(REPEAT_USAGE.to_string());
+                    return;
+                };
+                if every_secs == 0 || message.trim().is_empty() {
+                    self.add_error_message(REPEAT_USAGE.to_string());
+                    return;
+                }
+                self.start_repeat_task(every_secs, message.trim().to_string());
+            }
             SlashCommand::Plan if !trimmed.is_empty() => {
                 if !self.apply_plan_slash_command() {
                     return;
@@ -731,6 +856,7 @@ impl ChatWidget {
             | SlashCommand::Copy
             | SlashCommand::Diff
             | SlashCommand::Rename
+            | SlashCommand::Repeat
             | SlashCommand::TestApproval => QueueDrain::Continue,
             SlashCommand::Feedback
             | SlashCommand::New
