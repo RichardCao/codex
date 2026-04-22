@@ -36,6 +36,10 @@ Quick local verification:
 /repeat off
 ```
 
+Share copy:
+
+- [`docs/repeat-fork-share.md`](./docs/repeat-fork-share.md)
+
 ## Quickstart
 
 ### Installing and running Codex CLI
